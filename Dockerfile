@@ -15,7 +15,11 @@ COPY        config.yml /etc/cloudwatch_exporter/config.yml
 
 RUN         apk update && \
             apk add ca-certificates && \
-            update-ca-certificates
+            update-ca-certificates \
+            && addgroup -S 65010 \
+            && adduser -D -S -G 65010 65010
+
+USER        65010:65010
 
 EXPOSE      9042
 ENTRYPOINT  [ "/bin/cloudwatch_exporter", "-config.file=/etc/cloudwatch_exporter/config.yml" ]
