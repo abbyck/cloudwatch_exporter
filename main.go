@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"time"
 
 	"os"
 	"sync"
@@ -12,6 +13,8 @@ import (
 	"github.com/Technofy/cloudwatch_exporter/config"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	cache "github.com/victorspringer/http-cache"
+	"github.com/victorspringer/http-cache/adapter/memory"
 )
 
 var (
@@ -19,19 +22,25 @@ var (
 	metricsPath   = flag.String("web.telemetry-path", "/metrics", "Path under which to expose exporter's metrics.")
 	scrapePath    = flag.String("web.telemetry-scrape-path", "/scrape", "Path under which to expose CloudWatch metrics.")
 	configFile    = flag.String("config.file", "config.yml", "Path to configuration file.")
+	cacheEnabled  = flag.Bool("cache.enabled", false, "Enable caching for the scrape endpoint")
+	cacheTTL      = flag.String("cache.ttl", "1m", "Cache TTL value in duration string. (e.g., 10s, 1m)")
 
-	globalRegistry *prometheus.Registry
-	settings       *config.Settings
-	totalRequests  prometheus.Counter
-	totalErrors    prometheus.Counter
-	scrapeDurationHistogramVec    prometheus.HistogramVec
-	configMutex    = &sync.Mutex{}
-	observers      = map[string]prometheus.ObserverVec{"scrapeDurationHistogram": prometheus.NewHistogramVec(prometheus.HistogramOpts{
-					Name: "cloudwatch_exporter_scrape_duration_seconds_buckets",
-					Help: "Time this CloudWatch scrape took, in seconds and shown in buckets",
-					Buckets: []float64{.25, .5, 1., 2., 5., 8., 16., 30., },}, []string{}),}
-	)
-	
+	globalRegistry             *prometheus.Registry
+	settings                   *config.Settings
+	totalRequests              prometheus.Counter
+	totalErrors                prometheus.Counter
+	scrapeDurationHistogramVec prometheus.HistogramVec
+	configMutex                = &sync.Mutex{}
+	observers                  = map[string]prometheus.ObserverVec{"scrapeDurationHistogram": prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "cloudwatch_exporter_scrape_duration_seconds_buckets",
+		Help:    "Time this CloudWatch scrape took, in seconds and shown in buckets",
+		Buckets: []float64{.25, .5, 1., 2., 5., 8., 16., 30.}}, []string{})}
+)
+
+const (
+	cacheResponseSize = 100
+)
+
 func loadConfigFile() error {
 	var err error
 	var tmpSettings *config.Settings
@@ -91,7 +100,7 @@ func handleTarget(w http.ResponseWriter, req *http.Request) {
 		DisableCompression: false,
 	})
 
-	iHandler := promhttp.InstrumentHandlerDuration(observers["scrapeDurationHistogram"],handler)
+	iHandler := promhttp.InstrumentHandlerDuration(observers["scrapeDurationHistogram"], handler)
 	// Serve the answer through the Collect method of the Collector
 	iHandler.ServeHTTP(w, req)
 	configMutex.Unlock()
@@ -126,11 +135,43 @@ func main() {
 
 	fmt.Println("CloudWatch exporter started...")
 
+	var cacheClient *cache.Client
+	if *cacheEnabled {
+		memcached, err := memory.NewAdapter(
+			memory.AdapterWithAlgorithm(memory.LRU),
+			memory.AdapterWithCapacity(cacheResponseSize),
+		)
+		if err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
+
+		TTL, err := time.ParseDuration(*cacheTTL)
+		if err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
+
+		cacheClient, err = cache.NewClient(
+			cache.ClientWithAdapter(memcached),
+			cache.ClientWithTTL(TTL),
+		)
+		if err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
+	}
+
 	// Expose the exporter's own metrics on /metrics
 	http.Handle(*metricsPath, promhttp.Handler())
 
 	// Expose CloudWatch through this endpoint
-	http.HandleFunc(*scrapePath, handleTarget)
+	scrapeHandler := http.HandlerFunc(handleTarget)
+	if *cacheEnabled {
+		http.Handle(*scrapePath, cacheClient.Middleware(scrapeHandler))
+	} else {
+		http.Handle(*scrapePath, scrapeHandler)
+	}
 
 	// Allows manual reload of the configuration
 	http.HandleFunc("/reload", handleReload)
