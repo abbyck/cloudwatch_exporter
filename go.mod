@@ -15,6 +15,7 @@ require (
 	github.com/prometheus/common v0.33.0 // indirect
 	github.com/prometheus/procfs v0.7.3 // indirect
 	github.com/prometheus/promu v0.13.0 // indirect
+	github.com/stretchr/testify v1.7.1
 	github.com/victorspringer/http-cache v0.0.0-20220131145941-ef3624e6666f // indirect
 	golang.org/x/net v0.0.0-20220403103023-749bd193bc2b // indirect
 	golang.org/x/oauth2 v0.0.0-20220309155454-6242fa91716a // indirect
