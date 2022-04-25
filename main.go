@@ -126,7 +126,7 @@ func main() {
 	})
 
 	totalScrapes = prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "cloudwatchexporter_requests_total",
+		Name: "cloudwatchexporter_scrapes_total",
 		Help: "Scrape requests made to CloudWatch Exporter",
 	})
 
