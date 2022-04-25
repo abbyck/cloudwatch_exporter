@@ -29,6 +29,7 @@ var (
 	settings                   *config.Settings
 	totalRequests              prometheus.Counter
 	totalErrors                prometheus.Counter
+	totalScrapes               prometheus.Counter
 	scrapeDurationHistogramVec prometheus.HistogramVec
 	configMutex                = &sync.Mutex{}
 	observers                  = map[string]prometheus.ObserverVec{"scrapeDurationHistogram": prometheus.NewHistogramVec(prometheus.HistogramOpts{
@@ -106,6 +107,14 @@ func handleTarget(w http.ResponseWriter, req *http.Request) {
 	configMutex.Unlock()
 }
 
+// total scrape Requests counter.
+func scrapeHitCounter(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		totalScrapes.Inc()
+		h.ServeHTTP(w, r)
+	})
+}
+
 func main() {
 	flag.Parse()
 
@@ -116,12 +125,18 @@ func main() {
 		Help: "API requests made to CloudWatch",
 	})
 
+	totalScrapes = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "cloudwatchexporter_requests_total",
+		Help: "Scrape requests made to CloudWatch Exporter",
+	})
+
 	totalErrors = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "cloudwatch_errors_total",
 		Help: "Failed API requests made to CloudWatch",
 	})
 
 	globalRegistry.MustRegister(totalRequests)
+	globalRegistry.MustRegister(totalScrapes)
 	globalRegistry.MustRegister(totalErrors)
 	globalRegistry.MustRegister(observers["scrapeDurationHistogram"])
 
@@ -168,7 +183,7 @@ func main() {
 	// Expose CloudWatch through this endpoint
 	scrapeHandler := http.HandlerFunc(handleTarget)
 	if *cacheEnabled {
-		http.Handle(*scrapePath, cacheClient.Middleware(scrapeHandler))
+		http.Handle(*scrapePath, scrapeHitCounter(cacheClient.Middleware(scrapeHandler)))
 	} else {
 		http.Handle(*scrapePath, scrapeHandler)
 	}
